@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""
+Copyright (c) Facebook, Inc. and its affiliates.
+
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+"""
+from bisect import bisect_right
+from typing import List
+
+import numpy as np
+import torch
+from torch.optim.optimizer import Optimizer
+
+
+class DropEpochsScheduler(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        drop_epochs: List[int],
+        *,
+        gamma: float = 0.1,
+        last_epoch: int = -1,
+    ) -> None:
+        self._drop_epochs = drop_epochs
+        self._gamma = gamma
+        super(DropEpochsScheduler, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self) -> List[float]:
+        step = np.sum(
+            [self.last_epoch + 1 >= drop_epoch for drop_epoch in self._drop_epochs]
+        )
+        return [base_lr * self._gamma ** step for base_lr in self.base_lrs]
+
+
+class WarmupMultiStepLR(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(
+        self,
+        optimizer,
+        milestones,
+        gamma=0.1,
+        warmup_factor=1.0 / 3,
+        warmup_iters=500,
+        warmup_method="linear",
+        last_epoch=-1,
+    ):
+        if not list(milestones) == sorted(milestones):
+            raise ValueError(
+                "Milestones should be a list of" " increasing integers. Got {}",
+                milestones,
+            )
+
+        if warmup_method not in ("constant", "linear"):
+            raise ValueError(
+                "Only 'constant' or 'linear' warmup_method accepted"
+                "got {}".format(warmup_method)
+            )
+        self.milestones = milestones
+        self.gamma = gamma
+        self.warmup_factor = warmup_factor
+        self.warmup_iters = warmup_iters
+        self.warmup_method = warmup_method
+        super(WarmupMultiStepLR, self).__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        warmup_factor = 1
+        if self.last_epoch < self.warmup_iters:
+            if self.warmup_method == "constant":
+                warmup_factor = self.warmup_factor
+            elif self.warmup_method == "linear":
+                alpha = self.last_epoch / self.warmup_iters
+                warmup_factor = self.warmup_factor * (1 - alpha) + alpha
+        return [
+            base_lr
+            * warmup_factor
+            * self.gamma ** bisect_right(self.milestones, self.last_epoch)
+            for base_lr in self.base_lrs
+        ]
